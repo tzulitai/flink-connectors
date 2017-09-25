@@ -25,8 +25,6 @@ import io.pravega.connectors.flink.serialization.WrappingSerializer;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 
-import org.apache.commons.lang3.RandomStringUtils;
-
 import org.apache.flink.api.common.functions.StoppableFunction;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.java.typeutils.ResultTypeQueryable;
@@ -41,7 +39,10 @@ import java.net.URI;
 import java.nio.ByteBuffer;
 import java.util.Set;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.stream.Collectors;
+
+import static io.pravega.connectors.flink.util.FlinkPravegaUtils.createPravegaReader;
+import static io.pravega.connectors.flink.util.FlinkPravegaUtils.generateRandomReaderGroupName;
+import static io.pravega.connectors.flink.util.FlinkPravegaUtils.getDefaultReaderName;
 
 /**
  * Flink source implementation for reading from pravega storage.
@@ -153,7 +154,7 @@ public class FlinkPravegaReader<T>
         this.controllerURI = controllerURI;
         this.scopeName = scope;
         this.deserializationSchema = deserializationSchema;
-        this.readerGroupName = "flink" + RandomStringUtils.randomAlphanumeric(20).toLowerCase();
+        this.readerGroupName = generateRandomReaderGroupName();
 
         // TODO: This will require the client to have access to the pravega controller and handle any temporary errors.
         //       See https://github.com/pravega/pravega/issues/553.
@@ -229,15 +230,13 @@ public class FlinkPravegaReader<T>
         log.info("{} : Creating Pravega reader with ID '{}' for controller URI: {}",
                 getRuntimeContext().getTaskNameWithSubtasks(), readerId, this.controllerURI);
 
-        // create the adapter between Pravega's serializers and Flink's serializers
-        @SuppressWarnings("unchecked")
-        final Serializer<T> deserializer = this.deserializationSchema instanceof WrappingSerializer ?
-                ((WrappingSerializer<T>) this.deserializationSchema).getWrappedSerializer() :
-                new FlinkDeserializer<>(this.deserializationSchema);
-
-        // build the reader
-        try (EventStreamReader<T> pravegaReader = ClientFactory.withScope(this.scopeName, this.controllerURI)
-                .createReader(readerId, this.readerGroupName, deserializer, ReaderConfig.builder().build())) {
+        try (EventStreamReader<T> pravegaReader = createPravegaReader(
+                this.scopeName,
+                this.controllerURI,
+                readerId,
+                this.readerGroupName,
+                this.deserializationSchema,
+                ReaderConfig.builder().build())) {
 
             log.info("Starting Pravega reader '{}' for controller URI {}", readerId, this.controllerURI);
 
@@ -355,18 +354,5 @@ public class FlinkPravegaReader<T>
 
             return deserializationSchema.deserialize(array);
         }
-    }
-
-    /*
-     * Helper method that derives default reader name from stream and scope name
-     */
-    private static String getDefaultReaderName(final String scope, final Set<String> streamNames) {
-        final String delimiter = "-";
-        final String reader = streamNames.stream().collect(Collectors.joining(delimiter)) + delimiter + scope;
-        int hash = 0;
-        for (int i = 0; i < reader.length(); i++) {
-            hash = reader.charAt(i) + (31 * hash);
-        }
-        return Integer.toString(hash);
     }
 }
